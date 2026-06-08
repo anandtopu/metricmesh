@@ -1,0 +1,17 @@
+apiVersion: 1
+
+# Load any dashboard JSON files found under the options.path directory into a
+# "MetricMesh" folder. updateIntervalSeconds lets edits to the JSON show up
+# without a Grafana restart.
+providers:
+  - name: MetricMesh
+    orgId: 1
+    folder: MetricMesh
+    folderUid: metricmesh
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

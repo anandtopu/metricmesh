@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+  labels: {{- include "metricmesh.labels" . | nindent 4 }}
+data:
+  # In-cluster service DNS for the broker/result backend.
+  REDIS_URL: "redis://{{ .Release.Name }}-redis:6379/0"
+  CELERY_RESULT_BACKEND: "redis://{{ .Release.Name }}-redis:6379/1"
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  SCORING_MODE: {{ .Values.app.scoringMode | quote }}
+  RATE_LIMIT_PER_MINUTE: {{ .Values.app.rateLimitPerMinute | quote }}
+  CONSENSUS_MIN_DETECTORS: {{ .Values.app.consensusMinDetectors | quote }}
+  AUDIT_ENABLED: {{ .Values.app.auditEnabled | quote }}
+  MODEL_REUSE_MAX_AGE_SECONDS: {{ .Values.app.modelReuseMaxAgeSeconds | quote }}
+  DEDUP_BUCKET_SECONDS: {{ .Values.app.dedupBucketSeconds | quote }}
+  DEFAULT_TENANT: {{ .Values.app.defaultTenant | quote }}
+  CORS_ALLOW_ORIGINS: {{ .Values.app.corsAllowOrigins | quote }}

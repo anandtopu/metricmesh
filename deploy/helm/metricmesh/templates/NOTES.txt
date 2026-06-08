@@ -1,0 +1,31 @@
+MetricMesh {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  - API           ({{ .Values.api.replicas }} replicas{{ if .Values.api.hpa.enabled }}, HPA {{ .Values.api.hpa.minReplicas }}-{{ .Values.api.hpa.maxReplicas }}{{ end }})
+  - Workers       {{ range .Values.workers }}{{ .name }}(q={{ .queue }},c={{ .concurrency }}) {{ end }}
+  - Beat          (singleton scheduler)
+{{- if .Values.flower.enabled }}
+  - Flower        (task monitor)
+{{- end }}
+{{- if .Values.timescaledb.enabled }}
+  - TimescaleDB   (bundled StatefulSet, {{ .Values.timescaledb.storage }})
+{{- end }}
+{{- if .Values.redis.enabled }}
+  - Redis         (bundled)
+{{- end }}
+
+Reach the API:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-api 8000:8000
+  curl http://localhost:8000/health
+
+{{- if .Values.flower.enabled }}
+
+Reach Flower:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-flower 5555:5555
+{{- end }}
+
+IMPORTANT:
+  * Build & push the app image first; set image.repository/image.tag to a registry
+    your cluster can pull (current: {{ include "metricmesh.image" . }}).
+  * The bundled DB password is a demo default — override secrets.* / timescaledb.password,
+    or replace the Secret "{{ .Release.Name }}-secrets" with an external-secrets-managed one.

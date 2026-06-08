@@ -1,0 +1,17 @@
+apiVersion: v2
+name: metricmesh
+description: >-
+  MetricMesh — distributed time-series anomaly detection platform. Deploys the
+  FastAPI API, per-queue Celery workers, Beat scheduler, and Flower, with health
+  probes, HPA, and externalized secrets (MM-11.5). TimescaleDB and Redis are
+  bundled for a self-contained demo and can be disabled to use managed services.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - anomaly-detection
+  - timeseries
+  - celery
+  - fastapi
+maintainers:
+  - name: MetricMesh

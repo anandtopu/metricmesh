@@ -1,0 +1,44 @@
+{{- if .Values.beat.enabled }}
+{{- $component := "beat" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "metricmesh.fullname" (dict "root" . "component" $component) }}
+  labels: {{- include "metricmesh.labels" . | nindent 4 }}
+spec:
+  # Beat is the periodic scheduler — there MUST be exactly one. Never scale > 1
+  # (duplicate schedules) and use Recreate so a rollout never briefly runs two.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "metricmesh.selectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "metricmesh.selectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+    spec:
+      {{- with .Values.image.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-for-redis
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z {{ .Release.Name }}-redis 6379; do sleep 2; done"]
+      containers:
+        - name: beat
+          image: {{ include "metricmesh.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery", "-A", "workers.celery_app:celery_app", "beat", "--loglevel=info"]
+          envFrom: {{- include "metricmesh.envFrom" . | nindent 12 }}
+          livenessProbe:
+            # Beat's only dependency is the broker — verify it can reach Redis.
+            exec:
+              command:
+                - python
+                - -c
+                - import redis, os; redis.from_url(os.environ["REDIS_URL"]).ping()
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+          resources: {{- toYaml .Values.beat.resources | nindent 12 }}
+{{- end }}

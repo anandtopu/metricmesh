@@ -1,0 +1,113 @@
+# MetricMesh Helm values (MM-11.5).
+# Override per environment with `-f my-values.yaml` or `--set`.
+
+image:
+  repository: metricmesh
+  tag: latest
+  pullPolicy: IfNotPresent
+# imagePullSecrets: [{name: regcred}]
+
+# Non-secret application config → rendered into a ConfigMap and injected via
+# envFrom. Feature flags default OFF, matching the app's own defaults.
+app:
+  logLevel: INFO
+  scoringMode: relative            # relative | absolute (MM-3.6)
+  rateLimitPerMinute: 0            # 0 = disabled (MM-1.5)
+  consensusMinDetectors: 1         # 1 = consensus off (MM-10.5)
+  auditEnabled: true               # audit trail on (MM-9.5)
+  modelReuseMaxAgeSeconds: 0       # 0 = always re-fit (MM-10.1)
+  dedupBucketSeconds: 300          # dedup/consensus bucket width (MM-5.3)
+  defaultTenant: default           # dev/single-tenant fallback (MM-9.3)
+  corsAllowOrigins: "http://localhost:3000"
+
+# Secret values → rendered into a Secret (override these in prod, or replace the
+# Secret entirely with an external-secrets / sealed-secrets managed one).
+secrets:
+  apiKeys: ""                      # comma-separated; empty = auth disabled
+  tenantApiKeys: ""                # JSON {"key":"tenant"} (MM-9.3)
+  slackWebhookUrl: ""
+  pagerdutyRoutingKey: ""
+  teamsWebhookUrl: ""
+
+# ── FastAPI ingest/query API ───────────────────────────────────────────────
+api:
+  replicas: 2
+  port: 8000
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits:   {cpu: "1",  memory: 512Mi}
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  # Prometheus scrape annotations (each API pod exposes /metrics).
+  metricsScrape: true
+
+# ── Celery workers, one Deployment per queue ───────────────────────────────
+workers:
+  - name: fast
+    queue: fast
+    concurrency: 8
+    replicas: 2
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits:   {cpu: "2",  memory: 1Gi}
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 8
+      targetCPUUtilizationPercentage: 75
+  - name: slow
+    queue: slow
+    concurrency: 2
+    replicas: 1
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits:   {cpu: "2",  memory: 2Gi}
+    hpa:
+      enabled: false
+  - name: alerts
+    queue: alerts
+    concurrency: 4
+    replicas: 1
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits:   {cpu: "1",  memory: 512Mi}
+    hpa:
+      enabled: false
+
+# ── Celery Beat (MUST be a singleton — exactly one scheduler) ───────────────
+beat:
+  enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits:   {cpu: 250m, memory: 256Mi}
+
+# ── Flower (Celery task monitor UI) ────────────────────────────────────────
+flower:
+  enabled: true
+  port: 5555
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits:   {cpu: 250m, memory: 256Mi}
+
+# ── Bundled stateful dependencies (disable to use managed services) ────────
+timescaledb:
+  enabled: true
+  image: timescale/timescaledb:2.27.1-pg16
+  user: mm
+  password: mm                     # CHANGE ME — moved into the Secret
+  database: metricmesh
+  storage: 10Gi
+  # storageClassName: standard
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits:   {cpu: "2",  memory: 2Gi}
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits:   {cpu: 500m, memory: 512Mi}

@@ -1,0 +1,71 @@
+{{- if .Values.timescaledb.enabled }}
+{{- $component := "timescaledb" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "metricmesh.fullname" (dict "root" . "component" $component) }}
+  labels: {{- include "metricmesh.labels" . | nindent 4 }}
+spec:
+  clusterIP: None          # headless, for the StatefulSet
+  selector: {{- include "metricmesh.selectorLabels" (dict "root" . "component" $component) | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "metricmesh.fullname" (dict "root" . "component" $component) }}
+  labels: {{- include "metricmesh.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "metricmesh.fullname" (dict "root" . "component" $component) }}
+  replicas: 1
+  selector:
+    matchLabels: {{- include "metricmesh.selectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "metricmesh.selectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+    spec:
+      containers:
+        - name: timescaledb
+          image: {{ .Values.timescaledb.image }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.timescaledb.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.timescaledb.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          livenessProbe:
+            exec: {command: ["pg_isready", "-U", {{ .Values.timescaledb.user | quote }}]}
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", {{ .Values.timescaledb.user | quote }}]}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources: {{- toYaml .Values.timescaledb.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.timescaledb.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.timescaledb.storage }}
+{{- end }}

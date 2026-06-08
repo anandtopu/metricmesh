@@ -1,0 +1,221 @@
+# In-container hostnames: override the localhost-based values in .env so each
+# service reaches Postgres/Redis by their compose service names. .env stays
+# correct for running the app directly on the host (local dev).
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://mm:mm@timescaledb:5432/metricmesh
+  DATABASE_URL_SYNC: postgresql+psycopg2://mm:mm@timescaledb:5432/metricmesh
+  REDIS_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  # MM-8.6: every app process writes prometheus_client metrics to this shared
+  # volume so the single api:8000/metrics endpoint can aggregate API + worker
+  # metrics across processes (MultiProcessCollector).
+  PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus-multiproc
+
+services:
+  # ── TimescaleDB ───────────────────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:2.27.1-pg16
+    container_name: metricmesh-tsdb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metricmesh
+      POSTGRES_USER: mm
+      POSTGRES_PASSWORD: mm
+    ports:
+      - "5432:5432"
+    volumes:
+      - tsdb_data:/var/lib/postgresql/data
+      - ./storage/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mm -d metricmesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: metricmesh-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI ingest + query API ────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-api
+    restart: unless-stopped
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - .:/app
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+    healthcheck:
+      # Ready only when the app can reach both Postgres and Redis (/readiness
+      # returns 503 when degraded, which curl -f turns into a failed check).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/readiness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ── Celery fast worker (statistical tasks) ─────────────────────────────────
+  worker_fast:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-worker-fast
+    restart: unless-stopped
+    command: celery -A workers.celery_app:celery_app worker -Q fast -c 8 --loglevel=info
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - .:/app
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+
+  # ── Celery slow worker (Prophet + Isolation Forest) ────────────────────────
+  worker_slow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-worker-slow
+    restart: unless-stopped
+    command: celery -A workers.celery_app:celery_app worker -Q slow -c 2 --loglevel=info
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - .:/app
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+
+  # ── Celery alert worker ───────────────────────────────────────────────────
+  worker_alerts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-worker-alerts
+    restart: unless-stopped
+    command: celery -A workers.celery_app:celery_app worker -Q alerts -c 4 --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - .:/app
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+
+  # ── Celery Beat (periodic scheduler) ─────────────────────────────────────
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-beat
+    restart: unless-stopped
+    command: celery -A workers.celery_app:celery_app beat --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - .:/app
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+
+  # ── Celery Flower (task monitor UI) ──────────────────────────────────────
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-flower
+    restart: unless-stopped
+    command: celery -A workers.celery_app:celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    env_file: .env
+    environment:
+      <<: *app-env
+    volumes:
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+
+  # ── Prometheus scraper (opt-in: `docker compose --profile scraper up -d`) ──
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: metricmesh-scraper
+    restart: unless-stopped
+    profiles: ["scraper"]
+    command: python -m ingestion.scraper_main
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      <<: *app-env
+      # Default target: Prometheus' own /metrics. Override to scrape any exporter.
+      PROMETHEUS_SCRAPE_URL: http://prometheus:9090/metrics
+    volumes:
+      - .:/app
+      - prometheus_multiproc:/tmp/prometheus-multiproc
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:13.0.1
+    container_name: metricmesh-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v3.11.3
+    container_name: metricmesh-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./grafana/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  tsdb_data:
+  grafana_data:
+  # MM-8.6: shared prometheus_client multiprocess dir (API + workers).
+  prometheus_multiproc:

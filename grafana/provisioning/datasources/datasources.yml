@@ -1,0 +1,27 @@
+apiVersion: 1
+
+# Auto-provisioned data sources. Hostnames are the docker-compose service names
+# (Grafana shares the compose network with timescaledb / prometheus).
+datasources:
+  - name: TimescaleDB
+    uid: metricmesh-tsdb
+    type: postgres
+    access: proxy
+    url: timescaledb:5432
+    user: mm
+    isDefault: true
+    editable: true
+    jsonData:
+      database: metricmesh
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    secureJsonData:
+      password: mm
+
+  - name: Prometheus
+    uid: metricmesh-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    editable: true
