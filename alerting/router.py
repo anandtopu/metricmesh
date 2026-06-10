@@ -180,6 +180,63 @@ class EmailSink(AlertSink):
         log.info("email.sent", metric=metric, recipients=len(self._recipients))
 
 
+class SmsSink(AlertSink):
+    """Send an alert as an SMS text message via the Twilio Messages REST API.
+
+    Dependency-free: posts form-encoded data to Twilio over ``httpx`` with HTTP
+    Basic auth (Account SID + Auth Token) rather than pulling in the ``twilio``
+    SDK. One message is sent per recipient so a single bad number doesn't sink
+    the rest. SMS bodies are length-sensitive, so the message is intentionally
+    terse — metric, value, score, and time only.
+    """
+    name = "sms"
+
+    def __init__(
+        self,
+        account_sid: str,
+        auth_token: str,
+        sender: str,
+        recipients: list[str],
+    ) -> None:
+        self._account_sid = account_sid
+        self._auth_token = auth_token
+        self._sender = sender
+        self._recipients = recipients
+
+    def _body(self, anomaly: dict[str, Any]) -> str:
+        score_pct = round(float(anomaly.get("score", 0)) * 100)
+        return (
+            f"MetricMesh anomaly: {anomaly.get('metric_name', '?')} "
+            f"= {float(anomaly.get('value', 0)):.4f} "
+            f"(score {score_pct}%) at {anomaly.get('timestamp', '?')}"
+        )
+
+    def send(self, anomaly: dict[str, Any]) -> None:
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{self._account_sid}/Messages.json"
+        body = self._body(anomaly)
+        errors: list[tuple[str, str]] = []
+        with httpx.Client(timeout=5.0) as client:
+            for to in self._recipients:
+                resp = client.post(
+                    url,
+                    data={"To": to, "From": self._sender, "Body": body},
+                    auth=(self._account_sid, self._auth_token),
+                )
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    errors.append((to, str(exc)))
+        if errors and len(errors) == len(self._recipients):
+            raise RuntimeError(f"All SMS recipients failed: {errors}")
+        if errors:
+            log.warning("sms.partial_failure", failures=errors)
+        log.info(
+            "sms.sent",
+            metric=anomaly.get("metric_name"),
+            recipients=len(self._recipients) - len(errors),
+        )
+
+
 class LogSink(AlertSink):
     """Fallback sink: logs the anomaly via structlog. Always available."""
     name = "log"
@@ -280,6 +337,19 @@ def available_sinks(settings: Any) -> dict[str, AlertSink]:
             username=settings.smtp_username,
             password=settings.smtp_password,
             use_tls=settings.smtp_use_tls,
+        )
+    if (
+        settings.twilio_account_sid
+        and settings.twilio_auth_token
+        and settings.sms_from
+        and settings.sms_to
+    ):
+        recipients = [r.strip() for r in settings.sms_to.split(",") if r.strip()]
+        sinks["sms"] = SmsSink(
+            account_sid=settings.twilio_account_sid,
+            auth_token=settings.twilio_auth_token,
+            sender=settings.sms_from,
+            recipients=recipients,
         )
     return sinks
 

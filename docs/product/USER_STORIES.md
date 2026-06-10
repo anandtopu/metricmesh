@@ -398,6 +398,16 @@ send incl. no-auth/no-TLS path, Teams MessageCard payload, header fail-safe, rou
 router change). **Note:** Email/Teams delivery is unit-tested with mocked transport (no live SMTP/Teams
 endpoint); the generic webhook proved the registration→routing→HTTP-delivery path live.
 
+**Follow-on — SMS text sink ✅ Built:** `alerting/router.py::SmsSink` sends each anomaly as an SMS via
+the **Twilio Messages REST API** (dependency-free — form-encoded `httpx` POST with HTTP Basic auth, no
+`twilio` SDK). One message per recipient so a single bad number doesn't sink the rest; partial failures
+are logged, an all-fail raises (so the Celery task retries an undelivered alert). Registered by
+`available_sinks()` only when all four of `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `SMS_FROM`,
+`SMS_TO` are set; routable by name `sms` via routing rules — **`AlertRouter` still untouched**. **Tests:**
+6 added in `tests/unit/test_router.py` (registration on/partial-off, per-recipient Twilio POST with
+Basic auth + form body, partial-failure no-raise, all-fail raises, route-via-rule). **Note:** delivery
+is unit-tested with mocked Twilio transport (no live SMS endpoint), like Email/Teams.
+
 ### MM-6.6 — Per-tenant / per-metric routing rules ✅ Built · P1 · 5pts
 **As** an EM **I want** alerts for my team's metrics routed to my team's channel **so that** ownership
 is clear.

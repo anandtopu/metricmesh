@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     alert_email_from: str = ""
     alert_email_to: str = ""              # comma-separated recipient list
+    # SMS text sink (Twilio Messages API) — registered only when all four of
+    # twilio_account_sid, twilio_auth_token, sms_from and sms_to are set.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    sms_from: str = ""                    # Twilio sender number, E.164 (+1...)
+    sms_to: str = ""                      # comma-separated recipient numbers
     alert_cooldown_seconds: int = 300
     # Dedup/consensus time-bucket width (MM-5.3). Anomalies whose timestamps fall
     # in the same `floor(epoch / dedup_bucket_seconds)` bucket are treated as the
