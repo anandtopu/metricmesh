@@ -43,7 +43,7 @@ Operators explore data in Grafana and monitor task health in Flower.
 | Shared, durable dedup across workers (Redis) | ✅ Built (MM-5.2) |
 | Configurable dedup/consensus bucket width | ✅ Built (MM-5.3) — `DEDUP_BUCKET_SECONDS` (default 300); cooldown via `ALERT_COOLDOWN_SECONDS` |
 | Multi-sink alert routing (Slack/PagerDuty/Webhook/Log) | ✅ Built |
-| Email / MS Teams / generic webhook sinks | ✅ Built (MM-6.5) — opt-in sinks registered without touching the router (open/closed) |
+| Email / MS Teams / generic webhook / SMS-text sinks | ✅ Built (MM-6.5) — opt-in sinks registered without touching the router (open/closed); SMS via Twilio |
 | Dead-letter store for poison tasks | ✅ Built (MM-4.6) — retry-exhausted tasks captured in `dead_letters`; inspect via `GET /api/v1/dead-letters` |
 | Audit trail (who/what/when) | ✅ Built (MM-9.5) — auth denials, feedback, alert routing in `audit_log`; inspect via `GET /api/v1/audit`; `AUDIT_ENABLED` |
 | On-demand detection API | ✅ Built |

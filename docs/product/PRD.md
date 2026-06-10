@@ -148,8 +148,8 @@ Full, testable detail lives in [USER_STORIES.md](./USER_STORIES.md). Summary by 
   isolation (fast/slow/alerts); retries with backoff + jitter; time limits.
 - **FR-5 Dedup** — Fingerprint by `(metric, detector, 5-min bucket)`; cooldown window; thread-safe;
   bounded memory.
-- **FR-6 Alerting** — Fan-out to Slack/PagerDuty/Webhook/Log; severity from score; partial-failure
-  handling; always-on log fallback.
+- **FR-6 Alerting** — Fan-out to Slack/PagerDuty/Webhook/Log/Teams/Email/SMS; severity from score;
+  partial-failure handling; always-on log fallback.
 - **FR-7 History & Query** — Persist anomalies/alerts; query anomalies by metric/time/detector;
   list active metrics; on-demand detection.
 - **FR-8 Observability** — `/health`, `/readiness` (DB **and** Redis), Flower, Grafana dashboards,

@@ -91,6 +91,11 @@ def _settings(rules: str = "", slack: str = "https://slack", pd: str = "pdkey", 
         smtp_use_tls=True,
         alert_email_from="",
         alert_email_to="",
+        # SMS (Twilio) sink — opt-in / off by default.
+        twilio_account_sid="",
+        twilio_auth_token="",
+        sms_from="",
+        sms_to="",
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -130,6 +135,7 @@ class TestRoutingRules:
 # ── Email / Teams / generic sinks (MM-6.5) ─────────────────────────────────
 from alerting.router import (  # noqa: E402
     EmailSink,
+    SmsSink,
     TeamsSink,
     _parse_webhook_headers,
     available_sinks,
@@ -211,3 +217,83 @@ class TestExtraSinks:
         assert _parse_webhook_headers("") == {}
         assert _parse_webhook_headers("not json") == {}      # fail-safe
         assert _parse_webhook_headers('["a"]') == {}         # not an object
+
+
+# ── SMS text sink (Twilio) ─────────────────────────────────────────────────
+import httpx  # noqa: E402
+
+
+def _sms_config(**overrides):
+    base = dict(
+        twilio_account_sid="ACxxxx",
+        twilio_auth_token="tok",
+        sms_from="+15550000000",
+        sms_to="+15551111111,+15552222222",
+    )
+    base.update(overrides)
+    return base
+
+
+class TestSmsSink:
+    def test_available_sinks_registers_sms_when_fully_configured(self):
+        s = _settings(slack="", pd="", **_sms_config())
+        sinks = available_sinks(s)
+        assert "sms" in sinks
+        assert sinks["sms"]._recipients == ["+15551111111", "+15552222222"]
+
+    def test_sms_sink_omitted_when_partially_configured(self):
+        # Missing auth token → sink must not register.
+        s = _settings(slack="", pd="", **_sms_config(twilio_auth_token=""))
+        assert "sms" not in available_sinks(s)
+
+    def test_sms_sink_posts_one_message_per_recipient(self):
+        anomaly = {"metric_name": "cpu.usage", "value": 9.9, "score": 0.95,
+                   "detector": "statistical", "timestamp": "2026-06-09T00:00:00Z"}
+        with patch("alerting.router.httpx.Client") as MockClient:
+            client = MockClient.return_value.__enter__.return_value
+            SmsSink("ACxxxx", "tok", "+15550000000",
+                    ["+15551111111", "+15552222222"]).send(anomaly)
+            assert client.post.call_count == 2
+            call = client.post.call_args_list[0]
+            assert call.args[0].endswith("/Accounts/ACxxxx/Messages.json")
+            assert call.kwargs["auth"] == ("ACxxxx", "tok")
+            data = call.kwargs["data"]
+            assert data["To"] == "+15551111111"
+            assert data["From"] == "+15550000000"
+            assert "cpu.usage" in data["Body"] and "95%" in data["Body"]
+
+    def test_sms_partial_failure_does_not_raise(self):
+        # First recipient 400s, second succeeds → no raise (best-effort delivery).
+        ok = type("R", (), {"raise_for_status": lambda self: None})()
+        bad_resp = httpx.Response(400, request=httpx.Request("POST", "https://t"))
+
+        def post(url, **kwargs):
+            return bad_resp if kwargs["data"]["To"] == "+15551111111" else ok
+
+        with patch("alerting.router.httpx.Client") as MockClient:
+            client = MockClient.return_value.__enter__.return_value
+            client.post.side_effect = post
+            # Should not raise despite one recipient failing.
+            SmsSink("AC", "tok", "+1555", ["+15551111111", "+15552222222"]).send(
+                {"metric_name": "m", "value": 1.0, "score": 0.5}
+            )
+
+    def test_sms_all_recipients_failing_raises(self):
+        bad_resp = httpx.Response(401, request=httpx.Request("POST", "https://t"))
+        with patch("alerting.router.httpx.Client") as MockClient:
+            client = MockClient.return_value.__enter__.return_value
+            client.post.return_value = bad_resp
+            with pytest.raises(RuntimeError):
+                SmsSink("AC", "tok", "+1555", ["+15551111111"]).send(
+                    {"metric_name": "m", "value": 1.0, "score": 0.5}
+                )
+
+    def test_sms_sink_routable_via_rule(self):
+        # Open/closed: a routing rule selects 'sms' purely via config.
+        rules = json.dumps([{"match": "*", "sinks": ["sms"]}])
+        with patch(
+            "config.get_settings",
+            return_value=_settings(rules=rules, slack="", pd="", **_sms_config()),
+        ):
+            router = build_default_router("cpu.usage")
+        assert {s.name for s in router._sinks} == {"sms"}
